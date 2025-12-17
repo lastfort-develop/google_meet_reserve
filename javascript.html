@@ -3,11 +3,9 @@
 
 <script>
 const currentViewMode = "<?= viewMode ?>";
-// モーダルインスタンス格納用
 let myModal = null;
 
 document.addEventListener('DOMContentLoaded', function() {
-  // Bootstrapモーダルの初期化
   const modalEl = document.getElementById('msgModal');
   myModal = new bootstrap.Modal(modalEl);
 
@@ -16,13 +14,10 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 });
 
-// --- モーダル表示用ヘルパー関数 ---
-
-// 通知用（OKボタンのみ）
 function showInfoModal(title, message, callback) {
   document.getElementById('msgModalTitle').innerText = title;
-  document.getElementById('msgModalBody').innerHTML = message; // HTMLタグ許可
-  document.getElementById('msgModalCancel').style.display = 'none'; // キャンセル非表示
+  document.getElementById('msgModalBody').innerHTML = message;
+  document.getElementById('msgModalCancel').style.display = 'none';
   
   const okBtn = document.getElementById('msgModalOK');
   okBtn.innerText = 'OK';
@@ -34,16 +29,14 @@ function showInfoModal(title, message, callback) {
   myModal.show();
 }
 
-// 確認用（OK/キャンセル）
 function showConfirmModal(title, message, onConfirm) {
   document.getElementById('msgModalTitle').innerText = title;
   document.getElementById('msgModalBody').innerHTML = message;
-  document.getElementById('msgModalCancel').style.display = 'inline-block'; // キャンセル表示
+  document.getElementById('msgModalCancel').style.display = 'inline-block';
   
   const okBtn = document.getElementById('msgModalOK');
   okBtn.innerText = '確定する';
   
-  // イベントリスナの重複防止のため、クローンして置換
   const newBtn = okBtn.cloneNode(true);
   okBtn.parentNode.replaceChild(newBtn, okBtn);
   
@@ -55,8 +48,6 @@ function showConfirmModal(title, message, onConfirm) {
   myModal.show();
 }
 
-
-// --- UI操作系 ---
 
 function addAttendeeRow() {
   const container = document.getElementById('attendees-container');
@@ -77,14 +68,14 @@ function addAttendeeRow() {
   container.appendChild(div);
 }
 
-// --- タイムテーブル生成ロジック ---
 function loadTimetable() {
   google.script.run.withSuccessHandler(renderTimetable).getAvailabilityConfig();
 }
 
+// --- ★修正5: タイムテーブル生成ロジックの変更 ---
 function renderTimetable(configData) {
   let targetDates = [];
-  let start = moment().add(2, 'days'); // 明後日
+  let start = moment().add(2, 'days');
   
   for (let i = 0; i < 14; i++) {
     let d = start.clone().add(i, 'days');
@@ -93,7 +84,7 @@ function renderTimetable(configData) {
     }
   }
 
-  // 主催者確定モードの場合、ゲストが希望した日時文字列を取得
+  // ゲスト希望日時文字列を取得
   let guestRequestedString = "";
   if (currentViewMode === 'confirm') {
     guestRequestedString = document.getElementById('guestRequestedDates').value || "";
@@ -102,6 +93,7 @@ function renderTimetable(configData) {
   let html = '<table class="table table-bordered table-sm">';
   html += '<thead><tr><th>時間帯</th>';
   targetDates.forEach(d => {
+    // 修正: 曜日フォーマットを統一
     html += `<th>${d.format('MM/DD')}<br>(${d.format('dd')})</th>`;
   });
   html += '</tr></thead><tbody>';
@@ -113,25 +105,50 @@ function renderTimetable(configData) {
     targetDates.forEach(d => {
       let dayIndex = d.day(); 
       let status = configData[r][dayIndex];
-      let cellValue = `${d.format('YYYY/MM/DD(dd)')} ${timeSlot}`;
       
-      // デフォルトは空き(OK)かどうかで判定
+      // セルごとのユニークな値（クリック時に取得する値）
+      // ※Moment.jsのフォーマットと完全に一致させる
+      let datePart = d.format('YYYY/MM/DD');
+      let cellValue = `${datePart}(${d.format('dd')}) ${timeSlot}`;
+      
       let isAvailable = (status === 'OK');
-      
-      // ★主催者確定モード時の特別判定
-      // 空き時間設定がOKでも、ゲストの希望に含まれていなければNG扱いにする
-      if (currentViewMode === 'confirm') {
-        if (!guestRequestedString.includes(cellValue)) {
-          isAvailable = false; 
-        }
-      }
 
-      if (isAvailable) {
-        html += `<td class="timetable-cell" data-val="${cellValue}" onclick="selectCell(this)">○</td>`;
-      } else {
-        // 主催者モードでNGになったものはグレーアウト用のクラスを付与
-        let cssClass = (currentViewMode === 'confirm') ? 'timetable-cell cell-disabled' : 'timetable-cell cell-ng';
-        html += `<td class="${cssClass}">×</td>`;
+      // 確定モード（Confirm）の表示ロジック
+      if (currentViewMode === 'confirm') {
+        // ★修正ポイント: 単純な文字列一致ではなく、日付と時間が含まれているかチェック
+        // 例: "2025/12/23" と "09:30-11:30" が両方とも guestRequestedString に含まれているか
+        // より厳密には、その組み合わせが存在するか確認
+        
+        // 判定ロジック: 日付部分と時間部分が、ゲスト希望文字列の中に「ひとかたまり」として存在するか確認
+        // 空白や区切り文字の揺らぎを吸収するため、シンプルに日付と時間が含まれているかで判定（簡易版）
+        let isCandidate = guestRequestedString.indexOf(datePart) !== -1 && guestRequestedString.indexOf(timeSlot) !== -1;
+
+        // もし「12/23の10:00」と「12/24の10:00」があり、クロスして誤検知するのを防ぐなら以下のように正規化して比較推奨ですが
+        // 今回のアプリ仕様なら上記でも概ね動きます。より確実なのはこちら↓
+        if (guestRequestedString.includes(cellValue)) {
+             isCandidate = true;
+        } else {
+             // 念のため、全角・半角スペースの差を無視して再チェック
+             let normGuest = guestRequestedString.replace(/\s+/g, '').replace(/　/g, '');
+             let normCell = cellValue.replace(/\s+/g, '').replace(/　/g, '');
+             isCandidate = normGuest.includes(normCell);
+        }
+
+        if (isCandidate) {
+          // ゲストが希望した日時: 薄いピンク(.cell-candidate) で ◎
+          html += `<td class="timetable-cell cell-candidate" data-val="${cellValue}" onclick="selectCell(this)">◎</td>`;
+        } else {
+          // それ以外: 選択不可
+          html += `<td class="timetable-cell cell-disabled">×</td>`;
+        }
+      } 
+      // ゲストモード / 通常モード
+      else {
+        if (isAvailable) {
+          html += `<td class="timetable-cell" data-val="${cellValue}" onclick="selectCell(this)">○</td>`;
+        } else {
+          html += `<td class="timetable-cell cell-ng">×</td>`;
+        }
       }
     });
     html += '</tr>';
@@ -140,15 +157,11 @@ function renderTimetable(configData) {
   
   document.getElementById('timetable-area').innerHTML = html;
 }
-
-// セル選択
 function selectCell(td) {
-  // viewMode=confirm の場合は、単一選択（他を消して、これを選ぶ）
   if (currentViewMode === 'confirm') {
     document.querySelectorAll('.cell-selected').forEach(el => el.classList.remove('cell-selected'));
     td.classList.add('cell-selected');
   } 
-  // viewMode=guest の場合は、複数選択（トグル）
   else {
     if (td.classList.contains('cell-selected')) {
       td.classList.remove('cell-selected');
@@ -165,14 +178,9 @@ function updateSelectedInput() {
   selectedCells.forEach(cell => {
     values.push(cell.getAttribute('data-val'));
   });
-  // 複数選択時は「、 」区切り
   document.getElementById('selectedDateDisplay').value = values.join('、 ');
 }
 
-
-// --- 送信処理系 ---
-
-// 1. 主催者作成
 function submitCreate() {
   const meetingName = document.getElementById('meetingName').value;
   if(!meetingName) {
@@ -214,8 +222,6 @@ function submitCreate() {
   });
 }
 
-// 2. ゲスト返信（確認ダイアログなしで送信の場合）
-// ※もし確認を挟むなら checkGuestSubmit のようなラッパーを作る
 function checkGuestSubmit() {
   const name = document.getElementById('reserverName').value;
   const email = document.getElementById('reserverEmail').value;
@@ -240,7 +246,6 @@ function execGuestReply(name, email, date) {
   const msg = document.getElementById('reserverMessage').value;
 
   google.script.run.withSuccessHandler(() => {
-    // 画面全体を完了メッセージに
     document.body.innerHTML = '<div class="container mt-5"><div class="alert alert-success"><h3>返信が完了しました。</h3><p>画面を閉じてください。</p></div></div>';
   }).handleGuestReply({
     id: id,
@@ -251,7 +256,6 @@ function execGuestReply(name, email, date) {
   });
 }
 
-// 3. 主催者確定
 function checkConfirmSubmit() {
   const date = document.getElementById('selectedDateDisplay').value;
   
@@ -260,7 +264,6 @@ function checkConfirmSubmit() {
     return;
   }
   
-  // 複数日時が含まれていないかチェック（念のため）
   if (date.includes('、')) {
     showInfoModal('確認', '確定処理のため、タイムテーブルから日時を「1つだけ」選択してください。');
     return;
