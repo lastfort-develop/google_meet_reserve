@@ -1,0 +1,287 @@
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/locale/ja.min.js"></script>
+
+<script>
+const currentViewMode = "<?= viewMode ?>";
+// モーダルインスタンス格納用
+let myModal = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+  // Bootstrapモーダルの初期化
+  const modalEl = document.getElementById('msgModal');
+  myModal = new bootstrap.Modal(modalEl);
+
+  if (currentViewMode !== 'create') {
+    loadTimetable();
+  }
+});
+
+// --- モーダル表示用ヘルパー関数 ---
+
+// 通知用（OKボタンのみ）
+function showInfoModal(title, message, callback) {
+  document.getElementById('msgModalTitle').innerText = title;
+  document.getElementById('msgModalBody').innerHTML = message; // HTMLタグ許可
+  document.getElementById('msgModalCancel').style.display = 'none'; // キャンセル非表示
+  
+  const okBtn = document.getElementById('msgModalOK');
+  okBtn.innerText = 'OK';
+  okBtn.onclick = function() {
+    myModal.hide();
+    if (callback) callback();
+  };
+  
+  myModal.show();
+}
+
+// 確認用（OK/キャンセル）
+function showConfirmModal(title, message, onConfirm) {
+  document.getElementById('msgModalTitle').innerText = title;
+  document.getElementById('msgModalBody').innerHTML = message;
+  document.getElementById('msgModalCancel').style.display = 'inline-block'; // キャンセル表示
+  
+  const okBtn = document.getElementById('msgModalOK');
+  okBtn.innerText = '確定する';
+  
+  // イベントリスナの重複防止のため、クローンして置換
+  const newBtn = okBtn.cloneNode(true);
+  okBtn.parentNode.replaceChild(newBtn, okBtn);
+  
+  newBtn.onclick = function() {
+    myModal.hide();
+    if (onConfirm) onConfirm();
+  };
+  
+  myModal.show();
+}
+
+
+// --- UI操作系 ---
+
+function addAttendeeRow() {
+  const container = document.getElementById('attendees-container');
+  const currentRows = container.querySelectorAll('.attendee-row').length;
+  
+  if (currentRows >= 8) {
+    showInfoModal('制限', '出席者はこれ以上追加できません（最大数です）');
+    return;
+  }
+
+  const div = document.createElement('div');
+  div.className = 'row mb-2 attendee-row';
+  div.innerHTML = `
+    <div class="col-md-4"><input type="text" class="form-control att-company" placeholder="社名"></div>
+    <div class="col-md-4"><input type="text" class="form-control att-name" placeholder="氏名"></div>
+    <div class="col-md-4"><input type="email" class="form-control att-email" placeholder="メールアドレス"></div>
+  `;
+  container.appendChild(div);
+}
+
+// --- タイムテーブル生成ロジック ---
+function loadTimetable() {
+  google.script.run.withSuccessHandler(renderTimetable).getAvailabilityConfig();
+}
+
+function renderTimetable(configData) {
+  let targetDates = [];
+  let start = moment().add(2, 'days'); // 明後日
+  
+  for (let i = 0; i < 14; i++) {
+    let d = start.clone().add(i, 'days');
+    if (d.day() !== 0 && d.day() !== 6) { 
+      targetDates.push(d);
+    }
+  }
+
+  // 主催者確定モードの場合、ゲストが希望した日時文字列を取得
+  let guestRequestedString = "";
+  if (currentViewMode === 'confirm') {
+    guestRequestedString = document.getElementById('guestRequestedDates').value || "";
+  }
+
+  let html = '<table class="table table-bordered table-sm">';
+  html += '<thead><tr><th>時間帯</th>';
+  targetDates.forEach(d => {
+    html += `<th>${d.format('MM/DD')}<br>(${d.format('dd')})</th>`;
+  });
+  html += '</tr></thead><tbody>';
+
+  for (let r = 1; r < configData.length; r++) {
+    let timeSlot = configData[r][0];
+    html += `<tr><td class="bg-light fw-bold">${timeSlot}</td>`;
+    
+    targetDates.forEach(d => {
+      let dayIndex = d.day(); 
+      let status = configData[r][dayIndex];
+      let cellValue = `${d.format('YYYY/MM/DD(dd)')} ${timeSlot}`;
+      
+      // デフォルトは空き(OK)かどうかで判定
+      let isAvailable = (status === 'OK');
+      
+      // ★主催者確定モード時の特別判定
+      // 空き時間設定がOKでも、ゲストの希望に含まれていなければNG扱いにする
+      if (currentViewMode === 'confirm') {
+        if (!guestRequestedString.includes(cellValue)) {
+          isAvailable = false; 
+        }
+      }
+
+      if (isAvailable) {
+        html += `<td class="timetable-cell" data-val="${cellValue}" onclick="selectCell(this)">○</td>`;
+      } else {
+        // 主催者モードでNGになったものはグレーアウト用のクラスを付与
+        let cssClass = (currentViewMode === 'confirm') ? 'timetable-cell cell-disabled' : 'timetable-cell cell-ng';
+        html += `<td class="${cssClass}">×</td>`;
+      }
+    });
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  
+  document.getElementById('timetable-area').innerHTML = html;
+}
+
+// セル選択
+function selectCell(td) {
+  // viewMode=confirm の場合は、単一選択（他を消して、これを選ぶ）
+  if (currentViewMode === 'confirm') {
+    document.querySelectorAll('.cell-selected').forEach(el => el.classList.remove('cell-selected'));
+    td.classList.add('cell-selected');
+  } 
+  // viewMode=guest の場合は、複数選択（トグル）
+  else {
+    if (td.classList.contains('cell-selected')) {
+      td.classList.remove('cell-selected');
+    } else {
+      td.classList.add('cell-selected');
+    }
+  }
+  updateSelectedInput();
+}
+
+function updateSelectedInput() {
+  const selectedCells = document.querySelectorAll('.timetable-cell.cell-selected');
+  const values = [];
+  selectedCells.forEach(cell => {
+    values.push(cell.getAttribute('data-val'));
+  });
+  // 複数選択時は「、 」区切り
+  document.getElementById('selectedDateDisplay').value = values.join('、 ');
+}
+
+
+// --- 送信処理系 ---
+
+// 1. 主催者作成
+function submitCreate() {
+  const meetingName = document.getElementById('meetingName').value;
+  if(!meetingName) {
+    showInfoModal('入力エラー', '会議名を入力してください');
+    return;
+  }
+  
+  const host = {
+    company: document.getElementById('hostCompany').value,
+    name: document.getElementById('hostName').value,
+    email: document.getElementById('hostEmail').value
+  };
+  
+  const attendees = [];
+  document.querySelectorAll('.attendee-row').forEach(row => {
+    const email = row.querySelector('.att-email').value;
+    if(email) {
+      attendees.push({
+        company: row.querySelector('.att-company').value,
+        name: row.querySelector('.att-name').value,
+        email: email
+      });
+    }
+  });
+
+  const btn = document.getElementById('btnAdjust');
+  btn.disabled = true;
+  btn.innerText = '送信中...';
+
+  google.script.run.withSuccessHandler((res) => {
+    showInfoModal('完了', res.message);
+    btn.innerText = '完了';
+  }).withFailureHandler((err) => {
+    showInfoModal('エラー', 'エラーが発生しました: ' + err);
+    btn.disabled = false;
+    btn.innerText = '調整（メール下書き作成）';
+  }).createDraftAndSave({
+    meetingName, host, attendees
+  });
+}
+
+// 2. ゲスト返信（確認ダイアログなしで送信の場合）
+// ※もし確認を挟むなら checkGuestSubmit のようなラッパーを作る
+function checkGuestSubmit() {
+  const name = document.getElementById('reserverName').value;
+  const email = document.getElementById('reserverEmail').value;
+  const date = document.getElementById('selectedDateDisplay').value;
+  
+  if(!name || !email) {
+    showInfoModal('入力エラー', '氏名とメールアドレスは必須です');
+    return;
+  }
+  if(!date) {
+    showInfoModal('入力エラー', '希望日時を選択してください');
+    return;
+  }
+
+  showConfirmModal('送信確認', '入力した内容で返信しますか？', function() {
+    execGuestReply(name, email, date);
+  });
+}
+
+function execGuestReply(name, email, date) {
+  const id = document.getElementById('bookingId').value;
+  const msg = document.getElementById('reserverMessage').value;
+
+  google.script.run.withSuccessHandler(() => {
+    // 画面全体を完了メッセージに
+    document.body.innerHTML = '<div class="container mt-5"><div class="alert alert-success"><h3>返信が完了しました。</h3><p>画面を閉じてください。</p></div></div>';
+  }).handleGuestReply({
+    id: id,
+    reserverName: name,
+    reserverEmail: email,
+    selectedDate: date, 
+    message: msg
+  });
+}
+
+// 3. 主催者確定
+function checkConfirmSubmit() {
+  const date = document.getElementById('selectedDateDisplay').value;
+  
+  if(!date) {
+    showInfoModal('入力エラー', '日時が選択されていません');
+    return;
+  }
+  
+  // 複数日時が含まれていないかチェック（念のため）
+  if (date.includes('、')) {
+    showInfoModal('確認', '確定処理のため、タイムテーブルから日時を「1つだけ」選択してください。');
+    return;
+  }
+
+  showConfirmModal(
+    '日程確定', 
+    `以下の日時で確定します。<br><strong>${date}</strong><br><br>関係者に確定メールが送信され、カレンダーに登録されます。よろしいですか？`,
+    function() {
+      execConfirm(date);
+    }
+  );
+}
+
+function execConfirm(date) {
+  const id = document.getElementById('bookingId').value;
+  google.script.run.withSuccessHandler(() => {
+    document.body.innerHTML = '<div class="container mt-5"><div class="alert alert-primary"><h3>確定処理が完了しました。</h3></div></div>';
+  }).confirmBooking({
+    id: id,
+    finalDate: date
+  });
+}
+</script>
